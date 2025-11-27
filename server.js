@@ -1,66 +1,65 @@
 import express from "express";
 import fetch from "node-fetch";
-import cheerio from "cheerio";
+import * as cheerio from "cheerio";
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
+// =============== TEST ROUTES ===============
+
+// Root test
 app.get("/", (req, res) => {
   res.send("SPI Browser API is running.");
 });
 
+// Test simple route
 app.get("/test", (req, res) => {
-  res.send("Test route placeholder.");
+  res.json({ message: "Test route OK" });
 });
 
-app.get("/spi", async (req, res) => {
-  const { state, postcode, suburb } = req.query;
-
-  if (!state || !postcode || !suburb) {
-    return res.status(400).json({ error: "Missing parameters" });
-  }
-
-  const url = `https://www.smartpropertyinvestment.com.au/data/${state}/${postcode}/${suburb}`;
-
+// =============== SCRAPE SPI ROUTE ===============
+// Example: /spi/nsw/2750/penrith
+app.get("/spi/:state/:postcode/:suburb", async (req, res) => {
   try {
-    const response = await fetch(url);
-    const html = await response.text();
+    const { state, postcode, suburb } = req.params;
 
+    const url = `https://www.smartpropertyinvestment.com.au/data/${state}/${postcode}/${suburb}`;
+    console.log("Fetching:", url);
+
+    const response = await fetch(url);
+    if (!response.ok) return res.status(500).json({ error: "SPI returned an error" });
+
+    const html = await response.text();
     const $ = cheerio.load(html);
 
-    // Helper to find label and return second column
-    function extractValue(labelText) {
-      let value = null;
+    // Look for growth report rows
+    const growthRows = [];
+    $("table tr").each((_, row) => {
+      const tds = $(row).find("td");
+      if (tds.length === 3) {
+        growthRows.push({
+          metric: $(tds[0]).text().trim(),
+          house: $(tds[1]).text().trim(),
+          unit: $(tds[2]).text().trim(),
+        });
+      }
+    });
 
-      $("tr").each((_, row) => {
-        const rowText = $(row).text().trim().toLowerCase();
-        if (rowText.includes(labelText.toLowerCase())) {
-          const cells = $(row).find("td");
-          value = $(cells[1]).text().trim() || null;
-        }
-      });
+    res.json({
+      success: true,
+      suburb,
+      state,
+      postcode,
+      growth: growthRows
+    });
 
-      return value;
-    }
-
-    const result = {
-      median_3y_house: extractValue("median 3 years"),
-      median_5y_house: extractValue("median 5 years"),
-      median_3y_unit:
-        extractValue("median 3 years (unit)") ||
-        extractValue("median 3yr") ||
-        extractValue("median 3 years unit"),
-      median_5y_unit:
-        extractValue("median 5 years (unit)") ||
-        extractValue("median 5yr") ||
-        extractValue("median 5 years unit"),
-    };
-
-    res.json(result);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "SPI scrape error", detail: err.toString() });
+    console.error("SCRAPE ERROR:", err);
+    res.status(500).json({ error: "Failed to scrape SPI", details: err.toString() });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running on port " + PORT));
+// =============== START SERVER ===============
+app.listen(PORT, () => {
+  console.log(`SPI API running on port ${PORT}`);
+});
